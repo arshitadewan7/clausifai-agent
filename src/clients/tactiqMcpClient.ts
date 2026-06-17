@@ -853,6 +853,17 @@ function computeExpiry(expiresIn: unknown): string | undefined {
 
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   const text = await response.text();
+
+  const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+  const looksLikeEventStream = contentType.includes("text/event-stream") || text.includes("\nevent:");
+
+  if (looksLikeEventStream) {
+    const parsedFromSse = parseEventStreamPayload<T>(text);
+    if (parsedFromSse !== null) {
+      return parsedFromSse;
+    }
+  }
+
   try {
     return JSON.parse(text) as T;
   } catch {
@@ -917,4 +928,37 @@ function collectStringArray(record: Record<string, unknown>, keys: string[]): st
   }
 
   return [];
+}
+
+function parseEventStreamPayload<T>(raw: string): T | null {
+  const normalized = raw.replace(/\r\n/g, "\n");
+  const events = normalized.split("\n\n");
+
+  for (const eventBlock of events) {
+    const lines = eventBlock
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    const dataLines = lines
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim());
+
+    if (dataLines.length === 0) {
+      continue;
+    }
+
+    const payload = dataLines.join("\n");
+    if (payload === "[DONE]") {
+      continue;
+    }
+
+    try {
+      return JSON.parse(payload) as T;
+    } catch {
+      // Continue searching later event frames.
+    }
+  }
+
+  return null;
 }
