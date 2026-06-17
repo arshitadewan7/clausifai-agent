@@ -1,5 +1,6 @@
 import type { ClaudeClient } from "../clients/claudeClient";
 import type { GmailClient } from "../clients/gmailClient";
+import { isLikelyBulkOrAutomated } from "../lib/emailUtils";
 import { logger } from "../lib/logger";
 import type { DigestResult, DraftReply } from "../types/domain";
 import type { MemoryStore } from "./memoryStore";
@@ -16,12 +17,24 @@ export class EmailService {
     const items: DigestResult["items"] = [];
 
     for (const thread of threads) {
-      const triage = await this.claudeClient.triageEmail(thread);
+      let triage = await this.claudeClient.triageEmail(thread);
+      const isBulk = isLikelyBulkOrAutomated(thread);
+
+      if (isBulk && triage.needsReply) {
+        triage = {
+          ...triage,
+          needsReply: false,
+          requestedAction: "No response required (bulk or automated sender)",
+          proposedNextStep: "Archive, label, or review later for context"
+        };
+      }
+
       await this.memory.saveEmailTriage(thread, triage);
 
       const item: DigestResult["items"][number] = { thread, triage };
+      const shouldDraft = triage.needsReply && !isBulk;
 
-      if (triage.needsReply) {
+      if (shouldDraft) {
         const draftBody = await this.claudeClient.draftReply(thread, triage);
         const draft = this.memory.createDraft(thread.id, draftBody);
         item.draft = draft;

@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 import type { Env } from "../config/env";
+import { extractSenderDisplayName, isLikelyBulkOrAutomated } from "../lib/emailUtils";
 import type { EmailThread, EmailTriage, MeetingSummary, TranscriptWebhookPayload } from "../types/domain";
 
 interface MeetingSummaryLLM {
@@ -35,7 +36,8 @@ export class ClaudeClient {
 
   async draftReply(thread: EmailThread, triage: EmailTriage): Promise<string> {
     if (!this.anthropic) {
-      return `Hi ${thread.from.split("@")[0]},\n\nThanks for the note. ${triage.proposedNextStep}.\n\nBest,\nArshita`;
+      const recipientName = extractSenderDisplayName(thread.from);
+      return `Hi ${recipientName},\n\nThanks for the note. ${triage.proposedNextStep}.\n\nBest,\nArshita`;
     }
 
     const prompt = [
@@ -102,7 +104,7 @@ export class ClaudeClient {
   private mockTriage(thread: EmailThread): EmailTriage {
     const lower = `${thread.subject} ${thread.snippet}`.toLowerCase();
     const urgent = lower.includes("today") || lower.includes("urgent") || lower.includes("asap");
-    const needsReply = !lower.includes("fyi");
+    const needsReply = !lower.includes("fyi") && !isLikelyBulkOrAutomated(thread);
 
     return {
       summary: `Email from ${thread.from} about ${thread.subject}.`,

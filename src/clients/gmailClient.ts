@@ -1,6 +1,7 @@
 import { google, gmail_v1 } from "googleapis";
 
 import type { Env } from "../config/env";
+import { isLikelyBulkOrAutomated } from "../lib/emailUtils";
 import { logger } from "../lib/logger";
 import type { EmailThread } from "../types/domain";
 import { createGoogleOauthClient } from "./googleAuth";
@@ -35,8 +36,19 @@ export class GmailClient {
 
     const list = await this.gmail.users.messages.list({
       userId: "me",
-      maxResults: limit,
-      q: "(is:unread OR is:starred) newer_than:14d"
+      maxResults: Math.max(limit * 2, 20),
+      q: [
+        "(is:unread OR is:starred)",
+        "newer_than:14d",
+        "-category:promotions",
+        "-category:social",
+        "-category:updates",
+        "-from:no-reply",
+        "-from:noreply",
+        "-from:notification",
+        "-from:notifications",
+        "-from:mailer-daemon"
+      ].join(" ")
     });
 
     const messages = list.data.messages ?? [];
@@ -68,7 +80,8 @@ export class GmailClient {
       });
     }
 
-    return threads;
+    const filtered = threads.filter((thread) => !isLikelyBulkOrAutomated(thread));
+    return filtered.slice(0, limit);
   }
 
   async sendDraftReply(thread: EmailThread, body: string): Promise<{ messageId: string }> {
