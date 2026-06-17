@@ -118,6 +118,20 @@ export class SlackAgent {
 
     this.receiver.router.get("/integrations/tactiq/callback", async (req, res) => {
       try {
+        const oauthError = typeof req.query.error === "string" ? req.query.error : "";
+        const oauthErrorDescription = typeof req.query.error_description === "string"
+          ? req.query.error_description
+          : "";
+
+        if (oauthError) {
+          logger.warn("Tactiq OAuth callback returned provider error", {
+            oauthError,
+            oauthErrorDescription
+          });
+          res.status(400).send(`Tactiq OAuth error: ${oauthError}${oauthErrorDescription ? ` (${oauthErrorDescription})` : ""}`);
+          return;
+        }
+
         const code = typeof req.query.code === "string" ? req.query.code : "";
         const state = typeof req.query.state === "string" ? req.query.state : "";
         if (!code || !state) {

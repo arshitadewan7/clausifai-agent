@@ -24,6 +24,7 @@ interface OAuthClientRegistration {
   clientSecret?: string;
   tokenEndpointAuthMethod: "none" | "client_secret_post";
   redirectUri: string;
+  resource: string;
 }
 
 interface OAuthTokenSet {
@@ -84,7 +85,11 @@ export class TactiqMcpClient {
     const protectedMetadata = await this.fetchProtectedResourceMetadata();
     const authMetadata = await this.fetchAuthorizationServerMetadata(protectedMetadata);
     const redirectUri = this.resolveRedirectUri(baseUrl);
-    const clientRegistration = await this.resolveClientRegistration(authMetadata, redirectUri);
+    const clientRegistration = await this.resolveClientRegistration(
+      authMetadata,
+      redirectUri,
+      protectedMetadata.resource
+    );
 
     const state = randomBytes(16).toString("hex");
     const codeVerifier = base64Url(randomBytes(32));
@@ -105,6 +110,7 @@ export class TactiqMcpClient {
     url.searchParams.set("state", state);
     url.searchParams.set("code_challenge", codeChallenge);
     url.searchParams.set("code_challenge_method", "S256");
+    url.searchParams.set("resource", clientRegistration.resource);
 
     return url.toString();
   }
@@ -119,12 +125,17 @@ export class TactiqMcpClient {
 
     const protectedMetadata = await this.fetchProtectedResourceMetadata();
     const authMetadata = await this.fetchAuthorizationServerMetadata(protectedMetadata);
-    const clientRegistration = await this.resolveClientRegistration(authMetadata, this.resolveRedirectUri(baseUrl));
+    const clientRegistration = await this.resolveClientRegistration(
+      authMetadata,
+      this.resolveRedirectUri(baseUrl),
+      protectedMetadata.resource
+    );
 
     const tokenResponse = await this.exchangeCodeForToken(authMetadata, clientRegistration, {
       code,
       redirectUri: pending.redirectUri,
-      codeVerifier: pending.codeVerifier
+      codeVerifier: pending.codeVerifier,
+      resource: clientRegistration.resource
     });
 
     await this.saveTokenSet(tokenResponse);
@@ -580,7 +591,11 @@ export class TactiqMcpClient {
   private async refreshAccessToken(): Promise<string> {
     const protectedMetadata = await this.fetchProtectedResourceMetadata();
     const authMetadata = await this.fetchAuthorizationServerMetadata(protectedMetadata);
-    const clientRegistration = await this.resolveClientRegistration(authMetadata, await this.resolveAnyRedirectUri());
+    const clientRegistration = await this.resolveClientRegistration(
+      authMetadata,
+      await this.resolveAnyRedirectUri(),
+      protectedMetadata.resource
+    );
 
     const current = await this.readStoredTokens();
     const refreshToken = this.env.TACTIQ_REFRESH_TOKEN ?? current?.refreshToken;
@@ -592,6 +607,7 @@ export class TactiqMcpClient {
     params.set("grant_type", "refresh_token");
     params.set("refresh_token", refreshToken);
     params.set("client_id", clientRegistration.clientId);
+    params.set("resource", clientRegistration.resource);
 
     if (clientRegistration.tokenEndpointAuthMethod === "client_secret_post" && clientRegistration.clientSecret) {
       params.set("client_secret", clientRegistration.clientSecret);
@@ -628,6 +644,7 @@ export class TactiqMcpClient {
       code: string;
       redirectUri: string;
       codeVerifier: string;
+      resource: string;
     }
   ): Promise<OAuthTokenSet> {
     const params = new URLSearchParams();
@@ -636,6 +653,7 @@ export class TactiqMcpClient {
     params.set("redirect_uri", paramsInput.redirectUri);
     params.set("client_id", clientRegistration.clientId);
     params.set("code_verifier", paramsInput.codeVerifier);
+    params.set("resource", paramsInput.resource);
 
     if (clientRegistration.tokenEndpointAuthMethod === "client_secret_post" && clientRegistration.clientSecret) {
       params.set("client_secret", clientRegistration.clientSecret);
@@ -663,14 +681,16 @@ export class TactiqMcpClient {
 
   private async resolveClientRegistration(
     authMetadata: AuthorizationServerMetadata,
-    redirectUri: string
+    redirectUri: string,
+    resource: string
   ): Promise<OAuthClientRegistration> {
     if (this.env.TACTIQ_CLIENT_ID) {
       return {
         clientId: this.env.TACTIQ_CLIENT_ID,
         clientSecret: this.env.TACTIQ_CLIENT_SECRET,
         tokenEndpointAuthMethod: this.env.TACTIQ_CLIENT_SECRET ? "client_secret_post" : "none",
-        redirectUri
+        redirectUri,
+        resource
       };
     }
 
@@ -680,7 +700,8 @@ export class TactiqMcpClient {
         clientId: saved.clientId,
         clientSecret: typeof saved.clientSecret === "string" ? saved.clientSecret : undefined,
         tokenEndpointAuthMethod: saved.tokenEndpointAuthMethod === "client_secret_post" ? "client_secret_post" : "none",
-        redirectUri
+        redirectUri,
+        resource
       };
     }
 
@@ -719,7 +740,8 @@ export class TactiqMcpClient {
       tokenEndpointAuthMethod: registration.token_endpoint_auth_method === "client_secret_post"
         ? "client_secret_post"
         : "none",
-      redirectUri
+      redirectUri,
+      resource
     };
 
     await this.stateStore.set("tactiq_oauth_client", {
@@ -727,6 +749,7 @@ export class TactiqMcpClient {
       clientSecret: resolved.clientSecret ?? null,
       tokenEndpointAuthMethod: resolved.tokenEndpointAuthMethod,
       redirectUri,
+      resource,
       updatedAt: new Date().toISOString()
     });
 
