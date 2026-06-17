@@ -7,12 +7,14 @@ features:
     always_online: false
   slash_commands:
     - command: /ops-digest
+      url: https://pod-acid-viking-mambo.trycloudflare.com/slack/events
       description: Build and post the latest email triage digest
-      usage_hint: ""
+      usage_hint: show latest digest
       should_escape: false
     - command: /ops-next
+      url: https://pod-acid-viking-mambo.trycloudflare.com/slack/events
       description: Show upcoming meetings with context
-      usage_hint: ""
+      usage_hint: show upcoming meetings
       should_escape: false
 oauth_config:
   scopes:
@@ -25,7 +27,7 @@ oauth_config:
 settings:
   interactivity:
     is_enabled: true
-    request_url: https://your-agent-host/slack/events
+    request_url: https://pod-acid-viking-mambo.trycloudflare.com/slack/events
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false
