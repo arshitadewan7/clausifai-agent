@@ -71,6 +71,11 @@ interface MeetingCandidate {
   transcript?: string;
 }
 
+interface ArtifactCandidate {
+  artifactId: string;
+  label: string;
+}
+
 export class TactiqMcpClient {
   private readonly pendingAuthStates = new Map<string, PendingAuthState>();
   private sessionId?: string;
@@ -158,6 +163,7 @@ export class TactiqMcpClient {
     if (meetings.length === 0) {
       meetings = await this.fetchMeetingsFromResources(limit);
     }
+    meetings = await this.hydrateMeetingsWithDetails(meetings, tools, limit);
 
     const dedupedById = new Map<string, MeetingCandidate>();
     for (const meeting of meetings) {
@@ -191,7 +197,7 @@ export class TactiqMcpClient {
     const listToolCandidates = tools.filter((tool) => {
       const label = `${tool.name} ${tool.description ?? ""}`.toLowerCase();
       const meetingLike = /meeting|transcript|call/.test(label);
-      const listLike = /list|search|find|recent|get/.test(label);
+      const listLike = /list|search|find|recent/.test(label);
       return meetingLike && listLike;
     });
 
@@ -262,6 +268,116 @@ export class TactiqMcpClient {
     }
 
     return meetings;
+  }
+
+  private async hydrateMeetingsWithDetails(
+    meetings: MeetingCandidate[],
+    tools: ToolDescriptor[],
+    limit: number
+  ): Promise<MeetingCandidate[]> {
+    if (meetings.length === 0) {
+      return meetings;
+    }
+
+    const getMeetingTool = this.findTool(tools, ["get_meeting"]);
+    const listArtifactsTool = this.findTool(tools, ["list_meeting_artifacts"]);
+    const getArtifactTool = this.findTool(tools, ["get_meeting_artifact"]);
+    const generationStatusTool = this.findTool(tools, ["get_generation_status"]);
+
+    const hydrated: MeetingCandidate[] = [];
+    for (const meeting of meetings.slice(0, limit)) {
+      let next = { ...meeting };
+
+      if (!next.transcript && getMeetingTool) {
+        const details = await this.callToolWithArgsCandidates(getMeetingTool.name, [
+          { meetingId: next.meetingId },
+          { meeting_id: next.meetingId },
+          { id: next.meetingId },
+          { meeting: next.meetingId },
+          { uri: next.meetingId }
+        ]);
+
+        if (details) {
+          const detailsRecords = this.extractRecords(details);
+          for (const record of detailsRecords) {
+            const normalized = this.normalizeMeetingRecord(record, next.meetingId, next.title);
+            if (!normalized) {
+              continue;
+            }
+
+            next = {
+              ...next,
+              title: normalized.title || next.title,
+              participants: normalized.participants.length > 0 ? normalized.participants : next.participants,
+              occurredAt: normalized.occurredAt || next.occurredAt,
+              transcript: normalized.transcript ?? next.transcript
+            };
+
+            if (next.transcript) {
+              break;
+            }
+          }
+
+          if (!next.transcript) {
+            const extracted = this.extractLongestText(details);
+            if (extracted && extracted.length > 40) {
+              next.transcript = extracted;
+            }
+          }
+        }
+      }
+
+      if (!next.transcript && listArtifactsTool && getArtifactTool) {
+        const listArtifacts = await this.callToolWithArgsCandidates(listArtifactsTool.name, [
+          { meetingId: next.meetingId },
+          { meeting_id: next.meetingId },
+          { id: next.meetingId },
+          { meeting: next.meetingId }
+        ]);
+
+        const artifactCandidates = this.extractArtifactCandidates(listArtifacts);
+        for (const artifact of artifactCandidates) {
+          const artifactData = await this.callToolWithArgsCandidates(getArtifactTool.name, [
+            { meetingId: next.meetingId, artifactId: artifact.artifactId },
+            { meeting_id: next.meetingId, artifact_id: artifact.artifactId },
+            { artifactId: artifact.artifactId },
+            { id: artifact.artifactId },
+            { uri: artifact.artifactId },
+            { meetingId: next.meetingId, id: artifact.artifactId }
+          ]);
+
+          if (!artifactData) {
+            continue;
+          }
+
+          const extracted = this.extractLongestText(artifactData);
+          if (extracted && extracted.length > 40) {
+            next.transcript = extracted;
+            break;
+          }
+        }
+      }
+
+      if (!next.transcript && generationStatusTool) {
+        const generationStatus = await this.callToolWithArgsCandidates(generationStatusTool.name, [
+          { meetingId: next.meetingId },
+          { meeting_id: next.meetingId },
+          { id: next.meetingId }
+        ]);
+
+        if (generationStatus) {
+          const statusText = this.extractLongestText(generationStatus);
+          logger.info("Tactiq transcript not ready yet", {
+            meetingId: next.meetingId,
+            status: statusText?.slice(0, 120) ?? "unknown"
+          });
+        }
+      }
+
+      hydrated.push(next);
+    }
+
+    return hydrated;
   }
 
   private normalizeMeetingRecord(
@@ -445,6 +561,65 @@ export class TactiqMcpClient {
 
   private async readResource(uri: string): Promise<unknown> {
     return this.mcpRequest("resources/read", { uri });
+  }
+
+  private findTool(tools: ToolDescriptor[], exactNames: string[]): ToolDescriptor | undefined {
+    const exactSet = new Set(exactNames.map((name) => name.toLowerCase()));
+    return tools.find((tool) => exactSet.has(tool.name.toLowerCase()));
+  }
+
+  private async callToolWithArgsCandidates(
+    toolName: string,
+    argsCandidates: Array<Record<string, unknown>>
+  ): Promise<unknown | null> {
+    for (const args of argsCandidates) {
+      try {
+        return await this.callTool(toolName, args);
+      } catch {
+        // Try next argument shape.
+      }
+    }
+
+    return null;
+  }
+
+  private extractArtifactCandidates(value: unknown): ArtifactCandidate[] {
+    const candidatesById = new Map<string, ArtifactCandidate>();
+    const records = this.extractRecords(value);
+
+    for (const record of records) {
+      if (!record || typeof record !== "object") {
+        continue;
+      }
+
+      const obj = record as Record<string, unknown>;
+      const artifactId = firstString(obj, ["artifactId", "artifact_id", "id", "uri", "key"]);
+      if (!artifactId) {
+        continue;
+      }
+
+      const label = firstString(obj, ["type", "kind", "name", "title", "mimeType"]) ?? "";
+      const existing = candidatesById.get(artifactId);
+      if (!existing || this.scoreArtifactLabel(label) > this.scoreArtifactLabel(existing.label)) {
+        candidatesById.set(artifactId, { artifactId, label });
+      }
+    }
+
+    return [...candidatesById.values()].sort((a, b) => this.scoreArtifactLabel(b.label) - this.scoreArtifactLabel(a.label));
+  }
+
+  private scoreArtifactLabel(label: string): number {
+    const lower = label.toLowerCase();
+    if (lower.includes("transcript")) {
+      return 100;
+    }
+    if (lower.includes("full")) {
+      return 80;
+    }
+    if (lower.includes("notes") || lower.includes("summary")) {
+      return 50;
+    }
+    return 10;
   }
 
   private async ensureSession(): Promise<void> {
