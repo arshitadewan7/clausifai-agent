@@ -471,7 +471,7 @@ export class TactiqMcpClient {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Accept: "application/json",
+        Accept: "application/json, text/event-stream",
         Authorization: `Bearer ${accessToken}`,
         "Mcp-Protocol-Version": "2025-03-26"
       },
@@ -484,7 +484,7 @@ export class TactiqMcpClient {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Accept: "application/json",
+          Accept: "application/json, text/event-stream",
           Authorization: `Bearer ${accessToken}`,
           "Mcp-Protocol-Version": "2025-03-26"
         },
@@ -535,7 +535,7 @@ export class TactiqMcpClient {
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      Accept: "application/json",
+      Accept: "application/json, text/event-stream",
       Authorization: `Bearer ${accessToken}`,
       "Mcp-Protocol-Version": "2025-03-26"
     };
