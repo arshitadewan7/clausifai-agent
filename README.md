@@ -36,6 +36,7 @@ Outbound email is only sent from the Slack `approve_draft` action path (`EmailSe
 - Add slash commands:
   - `/ops-digest`
   - `/ops-next`
+  - `/ops-sync-tactiq`
 - Point request URL to your deployment root; Slack events and actions are handled by Bolt.
 
 Use `docs/slack-app-manifest.yml` as a starting manifest.
@@ -45,6 +46,19 @@ Use `docs/slack-app-manifest.yml` as a starting manifest.
 - `GET /health` - health check
 - `POST /webhooks/transcript` - transcript ingestion webhook
   - Optional header auth: `x-transcript-secret` must match `TRANSCRIPT_WEBHOOK_SECRET`
+- `GET /integrations/tactiq/connect` - starts Tactiq MCP OAuth flow
+- `GET /integrations/tactiq/callback` - Tactiq OAuth callback URL
+
+## Tactiq MCP integration
+
+This service supports pull-based transcript sync from Tactiq MCP, without requiring webhook secrets.
+
+1. Set `APP_BASE_URL` to your public Render URL.
+2. Configure optional `TACTIQ_*` env vars in `.env` (see `.env.example`).
+3. Open `https://<your-service>/integrations/tactiq/connect` once to authorize.
+4. Use `/ops-sync-tactiq` in Slack to import recent transcripts.
+
+If `TACTIQ_SYNC_CRON` is set, periodic sync runs automatically.
 
 ## Cron
 

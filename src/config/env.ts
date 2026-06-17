@@ -19,6 +19,17 @@ const envSchema = z.object({
   SUPABASE_URL: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
 
+  APP_BASE_URL: z.string().optional(),
+
+  TACTIQ_MCP_URL: z.string().default("https://mcp.tactiq.io"),
+  TACTIQ_OAUTH_SCOPES: z.string().default("mcp:meetings:own mcp:meetings:details"),
+  TACTIQ_REDIRECT_URI: z.string().optional(),
+  TACTIQ_CLIENT_ID: z.string().optional(),
+  TACTIQ_CLIENT_SECRET: z.string().optional(),
+  TACTIQ_ACCESS_TOKEN: z.string().optional(),
+  TACTIQ_REFRESH_TOKEN: z.string().optional(),
+  TACTIQ_SYNC_CRON: z.string().optional(),
+
   TRANSCRIPT_WEBHOOK_SECRET: z.string().optional(),
   EMAIL_DIGEST_CRON: z.string().default("0 8 * * 1-5")
 });

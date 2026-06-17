@@ -102,4 +102,38 @@ export class SupabaseMemoryClient {
       logger.warn("Supabase insertActionItems failed", { error: error.message });
     }
   }
+
+  async getIntegrationState(key: string): Promise<Record<string, unknown> | null> {
+    if (!this.client) {
+      return null;
+    }
+
+    const { data, error } = await this.client
+      .from("integration_state")
+      .select("data")
+      .eq("id", key)
+      .maybeSingle();
+
+    if (error) {
+      logger.warn("Supabase getIntegrationState failed", { key, error: error.message });
+      return null;
+    }
+
+    return (data?.data as Record<string, unknown> | undefined) ?? null;
+  }
+
+  async upsertIntegrationState(key: string, data: Record<string, unknown>): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    const { error } = await this.client.from("integration_state").upsert({
+      id: key,
+      data
+    });
+
+    if (error) {
+      logger.warn("Supabase upsertIntegrationState failed", { key, error: error.message });
+    }
+  }
 }

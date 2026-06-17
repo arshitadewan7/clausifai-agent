@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 
 import type { Env } from "../config/env";
 import { extractSenderDisplayName, isLikelyBulkOrAutomated } from "../lib/emailUtils";
+import { logger } from "../lib/logger";
 import type { EmailThread, EmailTriage, MeetingSummary, TranscriptWebhookPayload } from "../types/domain";
 
 interface MeetingSummaryLLM {
@@ -23,13 +24,16 @@ export class ClaudeClient {
       return this.mockTriage(thread);
     }
 
-    const prompt = `You are an executive operations assistant.\nReturn strict JSON with keys: summary, requestedAction, urgency(low|medium|high), needsReply(boolean), proposedNextStep.\n\nEmail:\nFrom: ${thread.from}\nSubject: ${thread.subject}\nSnippet: ${thread.snippet}`;
-
-    const content = await this.runTextPrompt(prompt);
     try {
+      const prompt = `You are an executive operations assistant.\nReturn strict JSON with keys: summary, requestedAction, urgency(low|medium|high), needsReply(boolean), proposedNextStep.\n\nEmail:\nFrom: ${thread.from}\nSubject: ${thread.subject}\nSnippet: ${thread.snippet}`;
+      const content = await this.runTextPrompt(prompt);
       const parsed = JSON.parse(content) as EmailTriage;
       return parsed;
-    } catch {
+    } catch (error) {
+      logger.warn("Claude triage fallback triggered", {
+        error: error instanceof Error ? error.message : String(error),
+        subject: thread.subject
+      });
       return this.mockTriage(thread);
     }
   }
@@ -40,17 +44,26 @@ export class ClaudeClient {
       return `Hi ${recipientName},\n\nThanks for the note. ${triage.proposedNextStep}.\n\nBest,\nArshita`;
     }
 
-    const prompt = [
-      "Draft a concise professional reply in a founder/operator voice.",
-      "Output plain email body only.",
-      `From: ${thread.from}`,
-      `Subject: ${thread.subject}`,
-      `Summary: ${triage.summary}`,
-      `Requested action: ${triage.requestedAction}`,
-      `Proposed next step: ${triage.proposedNextStep}`
-    ].join("\n");
+    try {
+      const prompt = [
+        "Draft a concise professional reply in a founder/operator voice.",
+        "Output plain email body only.",
+        `From: ${thread.from}`,
+        `Subject: ${thread.subject}`,
+        `Summary: ${triage.summary}`,
+        `Requested action: ${triage.requestedAction}`,
+        `Proposed next step: ${triage.proposedNextStep}`
+      ].join("\n");
 
-    return this.runTextPrompt(prompt);
+      return await this.runTextPrompt(prompt);
+    } catch (error) {
+      logger.warn("Claude draft fallback triggered", {
+        error: error instanceof Error ? error.message : String(error),
+        subject: thread.subject
+      });
+      const recipientName = extractSenderDisplayName(thread.from);
+      return `Hi ${recipientName},\n\nThanks for the note. ${triage.proposedNextStep}.\n\nBest,\nArshita`;
+    }
   }
 
   async summarizeTranscript(payload: TranscriptWebhookPayload): Promise<MeetingSummaryLLM> {
@@ -63,20 +76,24 @@ export class ClaudeClient {
       };
     }
 
-    const prompt = [
-      "Summarize this transcript in strict JSON.",
-      "Keys: summary(string), decisions(string[]), openQuestions(string[]), actionItems([{owner,task}]).",
-      `Title: ${payload.title}`,
-      `Participants: ${payload.participants.join(", ")}`,
-      `Occurred At: ${payload.occurredAt}`,
-      "Transcript:",
-      payload.transcript
-    ].join("\n");
-
-    const content = await this.runTextPrompt(prompt);
     try {
+      const prompt = [
+        "Summarize this transcript in strict JSON.",
+        "Keys: summary(string), decisions(string[]), openQuestions(string[]), actionItems([{owner,task}]).",
+        `Title: ${payload.title}`,
+        `Participants: ${payload.participants.join(", ")}`,
+        `Occurred At: ${payload.occurredAt}`,
+        "Transcript:",
+        payload.transcript
+      ].join("\n");
+
+      const content = await this.runTextPrompt(prompt);
       return JSON.parse(content) as MeetingSummaryLLM;
-    } catch {
+    } catch (error) {
+      logger.warn("Claude transcript summary fallback triggered", {
+        error: error instanceof Error ? error.message : String(error),
+        meetingId: payload.meetingId
+      });
       return {
         summary: `Transcript processed for ${payload.title}.`,
         decisions: [],

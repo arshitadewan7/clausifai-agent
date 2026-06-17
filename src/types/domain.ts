@@ -50,7 +50,7 @@ export interface CalendarEvent {
 }
 
 export interface TranscriptWebhookPayload {
-  source: "otter" | "fireflies" | "fathom" | "unknown";
+  source: "otter" | "fireflies" | "fathom" | "tactiq" | "unknown";
   meetingId: string;
   title: string;
   participants: string[];

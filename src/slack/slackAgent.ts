@@ -6,6 +6,7 @@ import { logger } from "../lib/logger";
 import type { TranscriptWebhookPayload } from "../types/domain";
 import type { CalendarService } from "../services/calendarService";
 import type { EmailService } from "../services/emailService";
+import type { TactiqSyncService } from "../services/tactiqSyncService";
 import type { TranscriptService } from "../services/transcriptService";
 import {
   calendarBlocks,
@@ -19,6 +20,7 @@ interface SlackAgentDeps {
   emailService: EmailService;
   calendarService: CalendarService;
   transcriptService: TranscriptService;
+  tactiqSyncService: TactiqSyncService;
 }
 
 export class SlackAgent {
@@ -100,29 +102,121 @@ export class SlackAgent {
         res.status(500).json({ ok: false, error: "internal error" });
       }
     });
+
+    this.receiver.router.get("/integrations/tactiq/connect", async (req, res) => {
+      try {
+        const baseUrl = this.resolveBaseUrl(req);
+        const redirectUrl = await this.deps.tactiqSyncService.buildConnectUrl(baseUrl);
+        res.redirect(302, redirectUrl);
+      } catch (error) {
+        logger.error("Failed to start Tactiq OAuth", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+        res.status(500).json({ ok: false, error: "failed to start tactiq oauth" });
+      }
+    });
+
+    this.receiver.router.get("/integrations/tactiq/callback", async (req, res) => {
+      try {
+        const code = typeof req.query.code === "string" ? req.query.code : "";
+        const state = typeof req.query.state === "string" ? req.query.state : "";
+        if (!code || !state) {
+          res.status(400).send("Missing OAuth callback parameters.");
+          return;
+        }
+
+        const baseUrl = this.resolveBaseUrl(req);
+        await this.deps.tactiqSyncService.completeOAuth(baseUrl, code, state);
+
+        await this.app.client.chat.postMessage({
+          channel: this.deps.env.SLACK_DEFAULT_CHANNEL,
+          text: "Tactiq MCP connected successfully. Use /ops-sync-tactiq to import transcripts."
+        });
+
+        res.status(200).send("Tactiq connected successfully. You can close this tab.");
+      } catch (error) {
+        logger.error("Tactiq OAuth callback failed", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+        res.status(500).send("Tactiq OAuth failed. Check server logs.");
+      }
+    });
   }
 
   private registerSlackHandlers(): void {
     this.app.command("/ops-digest", async ({ ack, command, client }) => {
       await ack();
-      await this.postDigest(command.channel_id);
+      try {
+        await this.postDigest(command.channel_id);
 
-      await client.chat.postEphemeral({
-        channel: command.channel_id,
-        user: command.user_id,
-        text: "Digest completed and posted to channel."
-      });
+        await client.chat.postEphemeral({
+          channel: command.channel_id,
+          user: command.user_id,
+          text: "Digest completed and posted to channel."
+        });
+      } catch (error) {
+        logger.error("/ops-digest failed", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+
+        await client.chat.postEphemeral({
+          channel: command.channel_id,
+          user: command.user_id,
+          text: "Digest failed. Check service logs for details."
+        });
+      }
     });
 
     this.app.command("/ops-next", async ({ ack, command, client }) => {
       await ack();
+      try {
+        const events = await this.deps.calendarService.getUpcomingWithContext();
+        await client.chat.postMessage({
+          channel: command.channel_id,
+          text: "Upcoming meetings",
+          blocks: calendarBlocks(events) as any
+        });
+      } catch (error) {
+        logger.error("/ops-next failed", {
+          error: error instanceof Error ? error.message : String(error)
+        });
 
-      const events = await this.deps.calendarService.getUpcomingWithContext();
-      await client.chat.postMessage({
-        channel: command.channel_id,
-        text: "Upcoming meetings",
-        blocks: calendarBlocks(events) as any
-      });
+        await client.chat.postEphemeral({
+          channel: command.channel_id,
+          user: command.user_id,
+          text: "Could not fetch upcoming meetings."
+        });
+      }
+    });
+
+    this.app.command("/ops-sync-tactiq", async ({ ack, command, client }) => {
+      await ack();
+      try {
+        const result = await this.deps.tactiqSyncService.syncRecent(10);
+        await client.chat.postMessage({
+          channel: command.channel_id,
+          text: [
+            "Tactiq sync completed.",
+            `Discovered: ${result.discovered}`,
+            `Processed: ${result.processed}`,
+            `Skipped: ${result.skipped}`,
+            `Tools: ${result.toolNames.join(", ") || "none"}`
+          ].join("\n")
+        });
+      } catch (error) {
+        const connectUrl = this.deps.env.APP_BASE_URL
+          ? `${this.deps.env.APP_BASE_URL.replace(/\/$/, "")}/integrations/tactiq/connect`
+          : "/integrations/tactiq/connect";
+        logger.error("/ops-sync-tactiq failed", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+
+        await client.chat.postEphemeral({
+          channel: command.channel_id,
+          user: command.user_id,
+          text: `Tactiq sync failed. Connect OAuth first: ${connectUrl}`
+        });
+      }
     });
 
     this.app.action("approve_draft", async ({ ack, body, action, client }) => {
@@ -157,14 +251,20 @@ export class SlackAgent {
         return;
       }
 
-      await this.deps.emailService.rejectDraft(draftId);
+      try {
+        await this.deps.emailService.rejectDraft(draftId);
 
-      const channelId = body.channel?.id ?? this.deps.env.SLACK_DEFAULT_CHANNEL;
-      await client.chat.postEphemeral({
-        channel: channelId,
-        user: body.user.id,
-        text: `Draft ${draftId} rejected.`
-      });
+        const channelId = body.channel?.id ?? this.deps.env.SLACK_DEFAULT_CHANNEL;
+        await client.chat.postEphemeral({
+          channel: channelId,
+          user: body.user.id,
+          text: `Draft ${draftId} rejected.`
+        });
+      } catch (error) {
+        logger.error("reject_draft failed", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
     });
 
     this.app.action("edit_draft", async ({ ack, body, action, client }) => {
@@ -229,17 +329,38 @@ export class SlackAgent {
         return;
       }
 
-      await this.deps.emailService.editDraft(draftId, stateValue);
-      await client.chat.postMessage({
-        channel: this.deps.env.SLACK_DEFAULT_CHANNEL,
-        text: `Draft ${draftId} updated and returned to pending approval.`
-      });
+      try {
+        await this.deps.emailService.editDraft(draftId, stateValue);
+        await client.chat.postMessage({
+          channel: this.deps.env.SLACK_DEFAULT_CHANNEL,
+          text: `Draft ${draftId} updated and returned to pending approval.`
+        });
 
-      await client.chat.postEphemeral({
-        channel: this.deps.env.SLACK_DEFAULT_CHANNEL,
-        user: body.user.id,
-        text: `Draft ${draftId} saved.`
-      });
+        await client.chat.postEphemeral({
+          channel: this.deps.env.SLACK_DEFAULT_CHANNEL,
+          user: body.user.id,
+          text: `Draft ${draftId} saved.`
+        });
+      } catch (error) {
+        logger.error("edit_draft_modal failed", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
     });
+  }
+
+  private resolveBaseUrl(req: { protocol?: string; get?: (name: string) => string | undefined; headers?: Record<string, unknown> }): string {
+    if (this.deps.env.APP_BASE_URL) {
+      return this.deps.env.APP_BASE_URL.replace(/\/$/, "");
+    }
+
+    const protocol = req.protocol ?? "https";
+    const hostFromGet = req.get ? req.get("host") : undefined;
+    const host = hostFromGet ?? (typeof req.headers?.host === "string" ? req.headers.host : "");
+    if (!host) {
+      throw new Error("Unable to resolve base URL. Set APP_BASE_URL.");
+    }
+
+    return `${protocol}://${host}`.replace(/\/$/, "");
   }
 }

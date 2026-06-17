@@ -44,3 +44,9 @@ create table if not exists action_items (
   status text not null default 'open',
   created_at timestamptz not null default now()
 );
+
+create table if not exists integration_state (
+  id text primary key,
+  data jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
