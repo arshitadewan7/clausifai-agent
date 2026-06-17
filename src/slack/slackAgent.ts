@@ -217,6 +217,14 @@ export class SlackAgent {
             `Tools: ${result.toolNames.join(", ") || "none"}`
           ].join("\n")
         });
+
+        for (const summary of result.summaries) {
+          await client.chat.postMessage({
+            channel: command.channel_id,
+            text: `Meeting Summary: ${summary.title}`,
+            blocks: transcriptSummaryBlocks(summary) as any
+          });
+        }
       } catch (error) {
         const connectUrl = this.deps.env.APP_BASE_URL
           ? `${this.deps.env.APP_BASE_URL.replace(/\/$/, "")}/integrations/tactiq/connect`
